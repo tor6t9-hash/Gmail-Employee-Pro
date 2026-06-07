@@ -8,7 +8,7 @@ import time
 from threading import Lock
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = "8343465981:AAE4euR3pIQfmWPk2__0uqA4C_Je9bo_9PU"
+BOT_TOKEN = "8343465981:AAGiMVZwCcmzvARDt4UFRBF7Gno_4YN865E"
 ADMIN_ID = 8516499380 
 BOT_USERNAME = "Gmail_Employee_Pro_bot"   # removed @
 
