@@ -1,4 +1,4 @@
-import telebot
+8import telebot
 from telebot import types
 import psycopg2
 from psycopg2.extras import DictCursor
@@ -462,6 +462,7 @@ if __name__ == "__main__":
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     Thread(target=server.serve_forever, daemon=True).start()
   
- bot.polling(none_stop=True, skip_pending_updates=True)
+    bot.polling(none_stop=True, skip_pending_updates=True)
+
 
 
