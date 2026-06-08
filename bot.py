@@ -1,21 +1,25 @@
 import telebot
 from telebot import types
-import sqlite3
+import psycopg2
+from psycopg2.extras import DictCursor
 import threading
 import random
 import string
 from datetime import datetime
 import time
+import os
 
 # ==================== কনফিগারেশন ====================
-BOT_TOKEN = "8343465981:AAGiMVZwCcmzvARDt4UFRBF7Gno_4YN865E" 
+BOT_TOKEN = "8841382233:AAEV8qmkdoaRmdKsqHu1N3OkxIw2WcfjuEc" 
 ADMIN_ID = 8516499380  
 CHANNEL_ID = "@Gmail_Employee_News"
 CHANNEL_LINK = "https://t.me/Gmail_Employee_News"
-SUPPORT_USERNAME = "@Gmail_Employee_Support" 
-DB_NAME = "earning_bot.db"
+SUPPORT_USERNAME = "@gmail_employee_pro_support" 
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+# 💡 Supabase থেকে পাওয়া Database URL এখানে বসাবেন (নিচে নিয়ম দেওয়া আছে)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:[@Kaosar3344]@db.gtppxstmrcnusfcuqxqa.supabase.co:5432/postgres")
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML', num_threads=50)
 db_lock = threading.Lock()
 
 # ==================== ভাষা ডিকশনারি ====================
@@ -44,27 +48,34 @@ STRINGS = {
     }
 }
 
-# ==================== ডাটাবেস ফাংশন ====================
+# ==================== ডাটাবেস ফাংশন (PostgreSQL) ====================
 def query_db(query, args=(), one=False, commit=False):
     with db_lock:
+        conn = None
         try:
-            with sqlite3.connect(DB_NAME, check_same_thread=False) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                res = cursor.execute(query, args)
-                if commit: conn.commit()
-                rv = res.fetchall()
-                return (rv[0] if rv else None) if one else rv
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
+            cursor = conn.cursor()
+            cursor.execute(query, args)
+            if commit:
+                conn.commit()
+                rv = None
+            else:
+                rv = cursor.fetchall()
+            cursor.close()
+            return (rv[0] if rv else None) if one else rv
         except Exception as e:
             print(f"Database Error: {e}")
             return None
+        finally:
+            if conn:
+                conn.close()
 
 def init_db():
     query_db('''CREATE TABLE IF NOT EXISTS users (
-        uid INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, 
+        uid BIGINT PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, 
         hold REAL DEFAULT 0, done_tasks INTEGER DEFAULT 0, 
         join_date TEXT, lang TEXT DEFAULT 'BN', status TEXT DEFAULT 'Active',
-        referred_by INTEGER DEFAULT 0, last_submit INTEGER DEFAULT 0
+        referred_by BIGINT DEFAULT 0, last_submit INTEGER DEFAULT 0
     )''', commit=True)
     query_db('''CREATE TABLE IF NOT EXISTS config (
         id INTEGER PRIMARY KEY, min_withdraw REAL DEFAULT 50.0, 
@@ -72,12 +83,15 @@ def init_db():
         bot_status TEXT DEFAULT 'ON'
     )''', commit=True)
     query_db('''CREATE TABLE IF NOT EXISTS withdraws (
-        wid INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, amount REAL, number TEXT, status TEXT DEFAULT 'Pending'
+        wid SERIAL PRIMARY KEY, uid BIGINT, amount REAL, number TEXT, status TEXT DEFAULT 'Pending'
     )''', commit=True)
     query_db('''CREATE TABLE IF NOT EXISTS tasks (
-        tid INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, details TEXT, status TEXT DEFAULT 'Pending', reward_amt REAL DEFAULT 0
+        tid SERIAL PRIMARY KEY, uid BIGINT, details TEXT, status TEXT DEFAULT 'Pending', reward_amt REAL DEFAULT 0
     )''', commit=True)
-    if not query_db("SELECT * FROM config", one=True):
+    
+    # প্রথমবার কনফিগ ইনসার্ট করা
+    conf = query_db("SELECT * FROM config WHERE id=1", one=True)
+    if not conf:
         query_db("INSERT INTO config (id, min_withdraw, ref_bonus, task_reward, bot_status) VALUES (1, 50.0, 5.0, 25.0, 'ON')", commit=True)
 
 init_db()
@@ -105,7 +119,7 @@ def force_join_kb():
     return kb
 
 def main_kb(uid):
-    user = query_db("SELECT lang FROM users WHERE uid=?", (uid,), one=True)
+    user = query_db("SELECT lang FROM users WHERE uid=%s", (uid,), one=True)
     lang = user['lang'] if user else 'BN'
     L = STRINGS[lang]
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -137,7 +151,7 @@ def admin_settings_inline():
 def start(m):
     bot.clear_step_handler_by_chat_id(m.chat.id) 
     uid, uname = m.chat.id, m.from_user.first_name
-    user = query_db("SELECT * FROM users WHERE uid=?", (uid,), one=True)
+    user = query_db("SELECT * FROM users WHERE uid=%s", (uid,), one=True)
     if not user:
         join_date = datetime.now().strftime("%d-%m-%Y")
         ref_id = 0
@@ -146,8 +160,8 @@ def start(m):
                 ref_id = int(m.text.split()[1])
                 if ref_id == uid: ref_id = 0
             except: ref_id = 0
-        query_db("INSERT INTO users (uid, username, join_date, referred_by) VALUES (?, ?, ?, ?)", (uid, uname, join_date, ref_id), commit=True)
-        user = query_db("SELECT * FROM users WHERE uid=?", (uid,), one=True)
+        query_db("INSERT INTO users (uid, username, join_date, referred_by) VALUES (%s, %s, %s, %s)", (uid, uname, join_date, ref_id), commit=True)
+        user = query_db("SELECT * FROM users WHERE uid=%s", (uid,), one=True)
     
     if not is_subscribed(uid):
         return bot.send_message(uid, STRINGS[user['lang']]['force_msg'].format(name=uname), reply_markup=force_join_kb())
@@ -157,7 +171,7 @@ def start(m):
 @bot.message_handler(func=lambda m: True)
 def router(m):
     uid = m.chat.id
-    user = query_db("SELECT * FROM users WHERE uid=?", (uid,), one=True)
+    user = query_db("SELECT * FROM users WHERE uid=%s", (uid,), one=True)
     if not user: return
     if user['status'] == 'Banned': return bot.send_message(uid, "🚫 আপনি ব্যান হয়েছেন।")
 
@@ -269,10 +283,10 @@ def withdraw_step_2(m, num):
 
     try:
         amt = float(m.text)
-        user = query_db("SELECT balance FROM users WHERE uid=?", (m.chat.id,), one=True)
+        user = query_db("SELECT balance FROM users WHERE uid=%s", (m.chat.id,), one=True)
         if amt > user['balance']: return bot.send_message(m.chat.id, "❌ পর্যাপ্ত ব্যালেন্স নেই।")
-        query_db("INSERT INTO withdraws (uid, amount, number) VALUES (?, ?, ?)", (m.chat.id, amt, num), commit=True)
-        query_db("UPDATE users SET balance = balance - ? WHERE uid = ?", (amt, m.chat.id), commit=True)
+        query_db("INSERT INTO withdraws (uid, amount, number) VALUES (%s, %s, %s)", (m.chat.id, amt, num), commit=True)
+        query_db("UPDATE users SET balance = balance - %s WHERE uid = %s", (amt, m.chat.id), commit=True)
         bot.send_message(m.chat.id, "✅ উত্তোলনের অনুরোধ সফল হয়েছে। অ্যাডমিন চেক করে টাকা পাঠিয়ে দিবে।")
     except: bot.send_message(m.chat.id, "❌ ভুল ইনপুট।")
 
@@ -285,7 +299,7 @@ def handle_callbacks(c):
         if c.data == "toggle_bot":
             conf = query_db("SELECT bot_status FROM config WHERE id=1", one=True)
             new_status = 'OFF' if conf['bot_status'] == 'ON' else 'ON'
-            query_db("UPDATE config SET bot_status=? WHERE id=1", (new_status,), commit=True)
+            query_db("UPDATE config SET bot_status=%s WHERE id=1", (new_status,), commit=True)
             bot.answer_callback_query(c.id, f"স্ট্যাটাস: {new_status}")
             bot.edit_message_reply_markup(uid, c.message.id, reply_markup=admin_settings_inline())
 
@@ -305,63 +319,63 @@ def handle_callbacks(c):
             bot.answer_callback_query(c.id)
 
         elif c.data.startswith("u_add_"):
-            target_uid = c.data.split("_")[2]
+            target_uid = int(c.data.split("_")[2])
             msg = bot.send_message(uid, f"💰 ইউজার {target_uid}-কে কত টাকা দিতে চান?")
             bot.register_next_step_handler(msg, lambda m: process_manual_add(m, target_uid))
             bot.answer_callback_query(c.id)
 
         elif c.data.startswith("u_ban_"):
-            target_uid = c.data.split("_")[2]
-            user = query_db("SELECT status FROM users WHERE uid=?", (target_uid,), one=True)
+            target_uid = int(c.data.split("_")[2])
+            user = query_db("SELECT status FROM users WHERE uid=%s", (target_uid,), one=True)
             new_status = 'Banned' if user['status'] == 'Active' else 'Active'
-            query_db("UPDATE users SET status=? WHERE uid=?", (new_status, target_uid), commit=True)
+            query_db("UPDATE users SET status=%s WHERE uid=%s", (new_status, target_uid), commit=True)
             bot.answer_callback_query(c.id, f"ইউজার এখন {new_status}", show_alert=True)
             bot.send_message(uid, f"✅ ইউজার 🆔 {target_uid} এখন {new_status}।")
 
         elif c.data.startswith("t_app_"):
-            tid = c.data.split("_")[2]
-            task = query_db("SELECT * FROM tasks WHERE tid=?", (tid,), one=True)
+            tid = int(c.data.split("_")[2])
+            task = query_db("SELECT * FROM tasks WHERE tid=%s", (tid,), one=True)
             if task and task['status'] == 'Pending':
-                query_db("UPDATE users SET balance = balance + ?, hold = hold - ?, done_tasks = done_tasks + 1 WHERE uid = ?", (task['reward_amt'], task['reward_amt'], task['uid']), commit=True)
-                query_db("UPDATE tasks SET status='Approved' WHERE tid=?", (tid,), commit=True)
-                user_data = query_db("SELECT referred_by FROM users WHERE uid=?", (task['uid'],), one=True)
+                query_db("UPDATE users SET balance = balance + %s, hold = hold - %s, done_tasks = done_tasks + 1 WHERE uid = %s", (task['reward_amt'], task['reward_amt'], task['uid']), commit=True)
+                query_db("UPDATE tasks SET status='Approved' WHERE tid=%s", (tid,), commit=True)
+                user_data = query_db("SELECT referred_by FROM users WHERE uid=%s", (task['uid'],), one=True)
                 if user_data and user_data['referred_by'] != 0:
-                    query_db("UPDATE users SET balance = balance + 2.5 WHERE uid = ?", (user_data['referred_by'],), commit=True)
+                    query_db("UPDATE users SET balance = balance + 2.5 WHERE uid = %s", (user_data['referred_by'],), commit=True)
                 bot.edit_message_text(f"✅ টাস্ক #{tid} অনুমোদিত।", uid, c.message.id)
                 bot.send_message(task['uid'], f"✅ আপনার টাস্ক অনুমোদিত হয়েছে! {task['reward_amt']}৳ মূল ব্যালেন্সে যোগ হয়েছে।")
             bot.answer_callback_query(c.id)
             
         elif c.data.startswith("t_rej_"):
-            tid = c.data.split("_")[2]
-            task = query_db("SELECT * FROM tasks WHERE tid=?", (tid,), one=True)
+            tid = int(c.data.split("_")[2])
+            task = query_db("SELECT * FROM tasks WHERE tid=%s", (tid,), one=True)
             if task and task['status'] == 'Pending':
-                query_db("UPDATE users SET hold = hold - ? WHERE uid = ?", (task['reward_amt'], task['uid']), commit=True)
-                query_db("UPDATE tasks SET status='Rejected' WHERE tid=?", (tid,), commit=True)
+                query_db("UPDATE users SET hold = hold - %s WHERE uid = %s", (task['reward_amt'], task['uid']), commit=True)
+                query_db("UPDATE tasks SET status='Rejected' WHERE tid=%s", (tid,), commit=True)
                 bot.edit_message_text(f"❌ টাস্ক #{tid} রিজেক্ট করা হয়েছে।", uid, c.message.id)
                 bot.send_message(task['uid'], "❌ দুঃখিত, আপনার জিমেইল টাস্কটি রিজেক্ট করা হয়েছে।")
             bot.answer_callback_query(c.id)
 
         elif c.data.startswith("pay_done_"):
-            wid = c.data.split("_")[2]
-            w_info = query_db("SELECT * FROM withdraws WHERE wid=?", (wid,), one=True)
+            wid = int(c.data.split("_")[2])
+            w_info = query_db("SELECT * FROM withdraws WHERE wid=%s", (wid,), one=True)
             if w_info and w_info['status'] == 'Pending':
-                query_db("UPDATE withdraws SET status='Paid' WHERE wid=?", (wid,), commit=True)
+                query_db("UPDATE withdraws SET status='Paid' WHERE wid=%s", (wid,), commit=True)
                 bot.edit_message_text(f"✅ উইথড্র #{wid} পেইড করা হয়েছে।", uid, c.message.id)
                 bot.send_message(w_info['uid'], f"✅ অভিনন্দন! আপনার {w_info['amount']}৳ উইথড্র সফলভাবে বিকাশ করা হয়েছে।")
             bot.answer_callback_query(c.id, "পেইড সফল!")
 
         elif c.data.startswith("pay_fail_"):
-            wid = c.data.split("_")[2]
-            w_info = query_db("SELECT * FROM withdraws WHERE wid=?", (wid,), one=True)
+            wid = int(c.data.split("_")[2])
+            w_info = query_db("SELECT * FROM withdraws WHERE wid=%s", (wid,), one=True)
             if w_info and w_info['status'] == 'Pending':
-                query_db("UPDATE users SET balance = balance + ? WHERE uid = ?", (w_info['amount'], w_info['uid']), commit=True)
-                query_db("UPDATE withdraws SET status='Rejected' WHERE wid=?", (wid,), commit=True)
+                query_db("UPDATE users SET balance = balance + %s WHERE uid = %s", (w_info['amount'], w_info['uid']), commit=True)
+                query_db("UPDATE withdraws SET status='Rejected' WHERE wid=%s", (wid,), commit=True)
                 bot.edit_message_text(f"❌ উইথড্র #{wid} রিজেক্ট করা হয়েছে এবং টাকা ফেরত দেওয়া হয়েছে।", uid, c.message.id)
                 bot.send_message(w_info['uid'], f"❌ আপনার {w_info['amount']}৳ উইথড্র রিকোয়েস্ট রিজেক্ট করা হয়েছে। টাকা ব্যালেন্সে ফেরত দেওয়া হয়েছে।")
             bot.answer_callback_query(c.id)
 
     if c.data.startswith("submit_task"):
-        user_info = query_db("SELECT last_submit FROM users WHERE uid=?", (uid,), one=True)
+        user_info = query_db("SELECT last_submit FROM users WHERE uid=%s", (uid,), one=True)
         current_ts = int(time.time())
         last_sub = user_info['last_submit'] or 0
         rem_time = 30 - (current_ts - last_sub)
@@ -376,14 +390,14 @@ def handle_callbacks(c):
         
         admin_details = f"📧 Email: <code>{parts[1]}</code>\n🔑 Pwd: <code>{parts[2]}</code>"
         
-        query_db("UPDATE users SET hold = hold + ?, last_submit = ? WHERE uid = ?", (conf['task_reward'], current_ts, uid), commit=True)
-        query_db("INSERT INTO tasks (uid, details, reward_amt) VALUES (?, ?, ?)", (uid, admin_details, conf['task_reward']), commit=True)
+        query_db("UPDATE users SET hold = hold + %s, last_submit = %s WHERE uid = %s", (conf['task_reward'], current_ts, uid), commit=True)
+        query_db("INSERT INTO tasks (uid, details, reward_amt) VALUES (%s, %s, %s)", (uid, admin_details, conf['task_reward']), commit=True)
         bot.edit_message_text("✅ <b>সাবমিট সফল!</b> টাকা পেন্ডিং ব্যালেন্সে যোগ হয়েছে।", uid, c.message.id)
-        bot.send_message(ADMIN_ID, f"🔔 <b>নতুন টাস্ক!</b> ইউজার: <code>{uid}</code>")
+        bot.send_message(ADMIN_ID, f"🔔 <b>নতুন টাস্ক!</b> ইউজার: <code>{uid}</code>\n\n{admin_details}")
 
     elif c.data.startswith("lang_"):
         new_lang = c.data.split("_")[1]
-        query_db("UPDATE users SET lang=? WHERE uid=?", (new_lang, uid), commit=True)
+        query_db("UPDATE users SET lang=%s WHERE uid=%s", (new_lang, uid), commit=True)
         bot.answer_callback_query(c.id, f"ভাষা: {new_lang}")
         bot.send_message(uid, "✅ সেটিংস আপডেট হয়েছে!", reply_markup=main_kb(uid))
 
@@ -396,25 +410,29 @@ def handle_callbacks(c):
 
 # ==================== অ্যাডমিন ফাংশনসমূহ ====================
 def manage_user_step(m):
-    user = query_db("SELECT * FROM users WHERE uid=?", (m.text,), one=True)
-    if not user: return bot.send_message(ADMIN_ID, "❌ ইউজার পাওয়া যায়নি।")
-    kb = types.InlineKeyboardMarkup().add(
-        types.InlineKeyboardButton("➕ টাকা যোগ", callback_data=f"u_add_{m.text}"),
-        types.InlineKeyboardButton("🚫 ব্যান/আনব্যান", callback_data=f"u_ban_{m.text}")
-    )
-    bot.send_message(ADMIN_ID, f"👤 ইউজার: <code>{m.text}</code>\nব্যালেন্স: {user['balance']}৳\nপেন্ডিং: {user['hold']}৳", reply_markup=kb)
+    try:
+        target_uid = int(m.text)
+        user = query_db("SELECT * FROM users WHERE uid=%s", (target_uid,), one=True)
+        if not user: return bot.send_message(ADMIN_ID, "❌ ইউজার পাওয়া যায়নি।")
+        kb = types.InlineKeyboardMarkup().add(
+            types.InlineKeyboardButton("➕ টাকা যোগ", callback_data=f"u_add_{target_uid}"),
+            types.InlineKeyboardButton("🚫 ব্যান/আনব্যান", callback_data=f"u_ban_{target_uid}")
+        )
+        bot.send_message(ADMIN_ID, f"👤 ইউজার: <code>{target_uid}</code>\nব্যালেন্স: {user['balance']}৳\nপেন্ডিং: {user['hold']}৳", reply_markup=kb)
+    except:
+        bot.send_message(ADMIN_ID, "❌ সঠিক আইডি দিন।")
 
 def update_config_field(m, field):
     try:
         val = float(m.text)
-        query_db(f"UPDATE config SET {field}=? WHERE id=1", (val,), commit=True)
+        query_db(f"UPDATE config SET {field}=%s WHERE id=1", (val,), commit=True)
         bot.send_message(ADMIN_ID, f"✅ সফলভাবে {field} আপডেট হয়েছে!")
     except: bot.send_message(ADMIN_ID, "❌ শুধুমাত্র সংখ্যা দিন।")
 
 def process_manual_add(m, target_uid):
     try:
         amt = float(m.text)
-        query_db("UPDATE users SET balance = balance + ? WHERE uid = ?", (amt, target_uid), commit=True)
+        query_db("UPDATE users SET balance = balance + %s WHERE uid = %s", (amt, target_uid), commit=True)
         bot.send_message(ADMIN_ID, "✅ টাকা যোগ করা হয়েছে।")
         bot.send_message(target_uid, f"🎁 অ্যাডমিন আপনার ব্যালেন্সে {amt}৳ যোগ করেছে।")
     except: bot.send_message(ADMIN_ID, "❌ ভুল ইনপুট।")
@@ -426,12 +444,11 @@ def process_broadcast(m):
         except: pass
     bot.send_message(ADMIN_ID, "✅ ব্রডকাস্ট সম্পন্ন!")
 
-# ==================== Render ফ্রি হোস্ট ফিক্স ====================
+# ==================== সার্ভার পোর্ট ফিক্স ====================
 if __name__ == "__main__":
     import os
     print("Bot is running...")
     
-    # একটি ফেক ওয়েব সার্ভার ব্যাকগ্রাউন্ডে চালু করা যেন Render পোর্ট এরর না দেয়
     from threading import Thread
     from http.server import HTTPServer, BaseHTTPRequestHandler
     
@@ -445,5 +462,4 @@ if __name__ == "__main__":
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     Thread(target=server.serve_forever, daemon=True).start()
     
-    # আপনার বটের মেইন পোলিং রান করা
     bot.infinity_polling()
