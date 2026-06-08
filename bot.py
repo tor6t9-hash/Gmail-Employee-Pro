@@ -461,7 +461,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     Thread(target=server.serve_forever, daemon=True).start()
-    
-        bot.skip_pending_updates()
-    bot.infinity_polling()
+  
+ bot.polling(none_stop=True, skip_pending_updates=True)
+
 
