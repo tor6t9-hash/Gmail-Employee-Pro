@@ -12,7 +12,7 @@ BOT_TOKEN = "8343465981:AAGiMVZwCcmzvARDt4UFRBF7Gno_4YN865E"
 ADMIN_ID = 8516499380  
 CHANNEL_ID = "@Gmail_Employee_News"
 CHANNEL_LINK = "https://t.me/Gmail_Employee_News"
-SUPPORT_USERNAME = "@gmail_employee_pro_support" 
+SUPPORT_USERNAME = "@Gmail_Employee_Support" 
 DB_NAME = "earning_bot.db"
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
