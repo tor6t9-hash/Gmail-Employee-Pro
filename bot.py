@@ -16,8 +16,8 @@ CHANNEL_ID = "@Gmail_Employee_News"
 CHANNEL_LINK = "https://t.me/Gmail_Employee_News"
 SUPPORT_USERNAME = "@gmail_employee_pro_support" 
 
-# 💡 Supabase থেকে পাওয়া Database URL এখানে বসাবেন (নিচে নিয়ম দেওয়া আছে)
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:[@Kaosar3344]@db.gtppxstmrcnusfcuqxqa.supabase.co:5432/postgres")
+# 💡 Supabase থেকে পাওয়া Database URL (URL Encoded Password)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:%40Kaosar3344@db.gtppxstmrcnusfcuqxqa.supabase.co:5432/postgres")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML', num_threads=50)
 db_lock = threading.Lock()
@@ -462,4 +462,4 @@ if __name__ == "__main__":
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     Thread(target=server.serve_forever, daemon=True).start()
     
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending_updates=True)
